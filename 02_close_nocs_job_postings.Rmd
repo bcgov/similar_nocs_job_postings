@@ -1,0 +1,180 @@
+---
+title: "Top 10 closest NOCs in terms of either term frequency or TF_IDF"
+output: flexdashboard::flex_dashboard
+runtime: shiny
+---
+
+```{r}
+library(tidyverse)
+library(here)
+library(conflicted)
+conflicts_prefer(dplyr::filter)
+tfidf <- read_rds(here("out","tfidf.rds"))|>
+  rename(measure=tf_idf)
+first_tfidf <- read_rds(here("out", "first_tfidf.rds"))
+tf <- read_rds(here("out","tf.rds"))|>
+  rename(measure=tf)
+first_tf <- read_rds(here("out", "first_tf.rds"))
+```
+
+Closest NOCs 
+===============================================
+
+Sidebar {.sidebar}
+--------------------------------------------
+
+-   We consider two methods:
+      -    Term Frequency (TF) aka absolute frequency
+      -    Term Frequency Inverse Document Frequency (TFIDF) aka relative frequency. 
+
+```{r}
+
+selectInput(
+  "metric",
+  "Select a basis to compare NOCs:",
+  c("Term Frequency","TF_IDF"),
+  "TF_IDF"
+) 
+
+sliderInput(
+  "dim",
+  "How many principal components should we use?",
+  10,
+  50,
+  20,
+  step = 1
+)
+
+selectInput(
+  "noc",
+  "Select an origin occupation:",
+  rownames(first_tfidf),
+  "Economists and economic policy researchers and analysts"
+) 
+
+renderUI({
+  selectInput(
+  "dest",
+  "Select a destination occupation:",
+  nearest_tbbl()$noc
+) 
+
+})
+#reactive elements-------------------------
+
+first <- reactive({
+  if(input$metric=="Term Frequency"){
+    first_tf[,1:input$dim]
+  }else{
+    first_tfidf[,1:input$dim]
+  }
+})
+
+terms <- reactive({
+  if(input$metric=="Term Frequency"){
+    tf
+  }else{
+    tfidf
+  }
+})
+
+query <- reactive({
+  first()[rownames(first())==input$noc,]|>
+  t()
+})
+
+nn <- reactive({
+  FNN::get.knnx(first(), query = query(), k = 11)
+})
+
+nearest_tbbl <- reactive({
+  tibble(noc=rownames(first())[nn()[["nn.index"]][,-1]], distance=nn()[["nn.dist"]][,-1])
+})
+
+origin <- reactive({
+  terms()|>
+    filter(noc_2021_5_name==input$noc)
+})
+
+dest <- reactive({
+  terms()|>
+    filter(noc_2021_5_name==input$dest)
+})
+```
+
+Column
+-------------------------------------
+    
+### Closest destinations in terms of `r renderUI(input$metric)`
+    
+```{r, fig.retina=2}
+renderPlot({
+  nearest_tbbl()|>
+    mutate(noc=str_trunc(noc, width=50))|>
+    ggplot(aes(distance, fct_reorder(noc, -distance)))+
+    geom_point()+
+    labs(y=NULL)+
+    theme_minimal()+
+    theme(text=element_text(size=14),
+          axis.text.x = element_text(angle = 90, vjust = 1, hjust=1))
+})
+```
+
+ 
+Column
+-------------------------------------
+    
+### Top `r renderUI({input$metric})` of `r renderUI({input$noc})`
+    
+```{r, fig.retina=2}
+renderPlot({
+  origin()|>
+    mutate(value=str_trunc(value, width=50))|>
+    ggplot(aes(measure, fct_reorder(value, measure)))+
+    geom_point()+
+    labs(x=input$metric, y=NULL)+
+    theme_minimal()+
+    theme(text=element_text(size=14),
+          axis.text.x = element_text(angle = 90, vjust = 1, hjust=1))
+})
+```
+    
+Column
+-------------------------------------
+
+### Top `r renderUI({input$metric})` of `r renderUI({input$dest})`
+
+```{r, fig.retina=2}
+renderPlot({
+  req(input$dest)
+  dest()|>
+    mutate(value=str_trunc(value, width=50))|>
+    ggplot(aes(measure, fct_reorder(value, measure)))+
+    geom_point()+
+    labs(x=input$metric, y=NULL)+
+    theme_minimal()+
+    theme(text=element_text(size=14),
+          axis.text.x = element_text(angle = 90, vjust = 1, hjust=1))
+})
+
+
+```
+
+Description
+=================================================
+
+Column
+-----------------------------------------------
+
+#### Data Source:
+
+-   job_postings_May29_2024.csv
+
+#### Steps
+
+1)  Filtered out some NOCs with low # postings.
+2)  Split the comma separated string data and got rid of garbage.
+3)  Calculate both the term frequency (TF) and term frequency inverse document frequency (TF_IDF) for variables: MIN_YEARS_EXPERIENCE, SKILLS_NAME, CERTIFICATIONS_NAME, EDUCATION_LEVELS_NAME, CIP4_NAME
+4) Retained the top 50 terms for each NOC, discarding the rest.
+5) Performed Principal component analysis on the wide (sparse) term matrix.
+6) Performed nearest neighbour search on a subset of the principal components.
