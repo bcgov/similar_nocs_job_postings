@@ -1,21 +1,59 @@
 ---
 title: "Top 10 closest NOCs in terms of either term frequency or TF_IDF"
-output: flexdashboard::flex_dashboard
+output: 
+  flexdashboard::flex_dashboard:
+    source_code: https://github.com/bcgov/similar_nocs_job_postings
 runtime: shiny
+resource_files:
+- out/tf.rds
+- out/tf_idf.rds
 ---
 
 ```{r}
 library(tidyverse)
 library(here)
 library(conflicted)
+library(data.table)
 conflicts_prefer(dplyr::filter)
-tfidf <- read_rds(here("out","tfidf.rds"))|>
+tfidf <- read_rds(here("out","tf_idf.rds"))|>
   rename(measure=tf_idf)
-first_tfidf <- read_rds(here("out", "first_tfidf.rds"))
 tf <- read_rds(here("out","tf.rds"))|>
   rename(measure=tf)
-first_tf <- read_rds(here("out", "first_tf.rds"))
 ```
+
+Description
+=================================================
+
+Column
+-----------------------------------------------
+
+#### Data Source:
+
+-   job_postings_May29_2024.csv
+
+#### Details:
+
+-   The goal of this exercise is to find occupations that are "close" in terms of the textual features of their job postings. 
+-   In the above file there are more than 16,000 textual features, and roughly 500 occupations. 
+-   Note that some occupations (e.g. hunters and trappers) have very few job postings: we filter them out.
+-   Distance metrics are meaningless in high dimensional space, so we need to find a way to reduce the dimensionality of the problem. 
+-   We do this in two ways:
+      -   We only retain the top_n features of each NOC, either in terms of 
+          -   term frequency (keeping the terms that have the maximum absolute frequency in job postings of a given NOC)
+          -   TF-IDF (keeping the terms that have the maximum relative frequency in job postings of a given NOC) 
+    -   We then perform principal component analysis of this reduced set of frequencies, retaining only a subset of the dimensions.
+  -   Finally, we do a nearest neighbour search in the subspace defined by the retained principal components. 
+  
+#### Using the app:
+
+-   The default selections are the ones that seemed to yield the most sensible results.
+-   Choose an origin occupation and the app will find the 10 closest "destination" occupations.
+-   The middle panel shows the highest frequency features of the origin occupation.
+-   If you choose a destination occupation its highest frequency features are shown in the right panel.
+   
+
+
+
 
 Closest NOCs 
 ===============================================
@@ -23,54 +61,45 @@ Closest NOCs
 Sidebar {.sidebar}
 --------------------------------------------
 
--   We consider two methods:
-      -    Term Frequency (TF) aka absolute frequency
-      -    Term Frequency Inverse Document Frequency (TFIDF) aka relative frequency. 
-
 ```{r}
-
 selectInput(
   "metric",
   "Select a basis to compare NOCs:",
   c("Term Frequency","TF_IDF"),
   "TF_IDF"
 ) 
-
+sliderInput(
+  "terms",
+  "How many terms should we use?",
+  1,
+  100,
+  50,
+  step = 1
+)
 sliderInput(
   "dim",
   "How many principal components should we use?",
-  10,
+  2,
   50,
-  20,
+  25,
   step = 1
 )
-
 selectInput(
   "noc",
   "Select an origin occupation:",
-  rownames(first_tfidf),
-  "Economists and economic policy researchers and analysts"
+  unique(tf$noc_2021_5_name),
+  selected = "Economists and economic policy researchers and analysts"
 ) 
-
 renderUI({
   selectInput(
   "dest",
   "Select a destination occupation:",
   nearest_tbbl()$noc
-) 
-
+)
 })
 #reactive elements-------------------------
 
-first <- reactive({
-  if(input$metric=="Term Frequency"){
-    first_tf[,1:input$dim]
-  }else{
-    first_tfidf[,1:input$dim]
-  }
-})
-
-terms <- reactive({
+tbbl <- reactive({
   if(input$metric=="Term Frequency"){
     tf
   }else{
@@ -78,26 +107,53 @@ terms <- reactive({
   }
 })
 
+slice_maxed <- reactive({
+  tbbl()|>
+    group_by(noc_2021_5_name)|>
+    slice_max(measure, n = input$terms, with_ties = FALSE)
+})
+
+wide <- reactive({
+  wide <- slice_maxed()|>
+    pivot_wider(names_from = "value", values_from = "measure")
+  setDT(wide) 
+  wide[is.na(wide)] <- 0
+  return(wide)
+})
+
+first_components <- reactive({
+  rwnms <- wide()$noc_2021_5_name
+  pca <- wide()|>
+   column_to_rownames("noc_2021_5_name")|>
+   scale()|>
+   prcomp()
+  first <- pca$x[,1:input$dim]
+  rownames(first) <- rwnms
+  return(first)
+})
+
 query <- reactive({
-  first()[rownames(first())==input$noc,]|>
+  first_components()[rownames(first_components())==input$noc,]|>
   t()
 })
 
+
 nn <- reactive({
-  FNN::get.knnx(first(), query = query(), k = 11)
+  FNN::get.knnx(first_components(), query = query(), k = 11)
 })
 
 nearest_tbbl <- reactive({
-  tibble(noc=rownames(first())[nn()[["nn.index"]][,-1]], distance=nn()[["nn.dist"]][,-1])
+  tibble(noc=rownames(first_components())[nn()[["nn.index"]][,-1]],
+         distance=nn()[["nn.dist"]][,-1])
 })
 
 origin <- reactive({
-  terms()|>
+  slice_maxed()|>
     filter(noc_2021_5_name==input$noc)
 })
 
 dest <- reactive({
-  terms()|>
+  slice_maxed()|>
     filter(noc_2021_5_name==input$dest)
 })
 ```
@@ -124,11 +180,12 @@ renderPlot({
 Column
 -------------------------------------
     
-### Top `r renderUI({input$metric})` of `r renderUI({input$noc})`
+### Top `r renderUI({input$metric})` of `r renderUI({input$noc})` (maximum of 50 displayed)
     
 ```{r, fig.retina=2}
 renderPlot({
   origin()|>
+    slice_max(measure, n=50, with_ties = FALSE)|>
     mutate(value=str_trunc(value, width=50))|>
     ggplot(aes(measure, fct_reorder(value, measure)))+
     geom_point()+
@@ -142,12 +199,13 @@ renderPlot({
 Column
 -------------------------------------
 
-### Top `r renderUI({input$metric})` of `r renderUI({input$dest})`
+### Top `r renderUI({input$metric})` of `r renderUI({input$dest})` (maximum of 50 displayed)
 
 ```{r, fig.retina=2}
 renderPlot({
   req(input$dest)
   dest()|>
+    slice_max(measure, n=50, with_ties = FALSE)|>
     mutate(value=str_trunc(value, width=50))|>
     ggplot(aes(measure, fct_reorder(value, measure)))+
     geom_point()+
@@ -160,21 +218,4 @@ renderPlot({
 
 ```
 
-Description
-=================================================
 
-Column
------------------------------------------------
-
-#### Data Source:
-
--   job_postings_May29_2024.csv
-
-#### Steps
-
-1)  Filtered out some NOCs with low # postings.
-2)  Split the comma separated string data and got rid of garbage.
-3)  Calculate both the term frequency (TF) and term frequency inverse document frequency (TF_IDF) for variables: MIN_YEARS_EXPERIENCE, SKILLS_NAME, CERTIFICATIONS_NAME, EDUCATION_LEVELS_NAME, CIP4_NAME
-4) Retained the top 50 terms for each NOC, discarding the rest.
-5) Performed Principal component analysis on the wide (sparse) term matrix.
-6) Performed nearest neighbour search on a subset of the principal components.
