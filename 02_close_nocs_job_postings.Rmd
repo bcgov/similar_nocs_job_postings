@@ -13,7 +13,6 @@ resource_files:
 library(tidyverse)
 library(here)
 library(conflicted)
-library(data.table)
 conflicts_prefer(dplyr::filter)
 tfidf <- read_rds(here("out","tf_idf.rds"))|>
   rename(measure=tf_idf)
@@ -114,11 +113,8 @@ slice_maxed <- reactive({
 })
 
 wide <- reactive({
-  wide <- slice_maxed()|>
-    pivot_wider(names_from = "value", values_from = "measure")
-  setDT(wide) 
-  wide[is.na(wide)] <- 0
-  return(wide)
+  slice_maxed()|>
+    pivot_wider(names_from = "value", values_from = "measure", values_fill = 0)
 })
 
 first_components <- reactive({
