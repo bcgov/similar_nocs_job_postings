@@ -51,9 +51,6 @@ Column
 -   If you choose a destination occupation its highest frequency features are shown in the right panel.
    
 
-
-
-
 Closest NOCs 
 ===============================================
 
@@ -97,7 +94,6 @@ renderUI({
 )
 })
 #reactive elements-------------------------
-
 tbbl <- reactive({
   if(input$metric=="Term Frequency"){
     tf
@@ -105,20 +101,25 @@ tbbl <- reactive({
     tfidf
   }
 })
-
 slice_maxed <- reactive({
   tbbl()|>
     group_by(noc_2021_5_name)|>
     slice_max(measure, n = input$terms, with_ties = FALSE)
 })
-
+origin <- reactive({
+  slice_maxed()|>
+    filter(noc_2021_5_name==input$noc)
+})
+dest <- reactive({
+  slice_maxed()|>
+    filter(noc_2021_5_name==input$dest)
+})
 wide <- reactive({
   slice_maxed()|>
     pivot_wider(names_from = "value", values_from = "measure", values_fill = 0)
 })
-
 first_components <- reactive({
-  rwnms <- wide()$noc_2021_5_name
+  rwnms <- wide()$noc_2021_5_name #to assign rownames after pca
   pca <- wide()|>
    column_to_rownames("noc_2021_5_name")|>
    scale()|>
@@ -127,30 +128,16 @@ first_components <- reactive({
   rownames(first) <- rwnms
   return(first)
 })
-
 query <- reactive({
   first_components()[rownames(first_components())==input$noc,]|>
   t()
 })
-
-
 nn <- reactive({
   FNN::get.knnx(first_components(), query = query(), k = 11)
 })
-
 nearest_tbbl <- reactive({
   tibble(noc=rownames(first_components())[nn()[["nn.index"]][,-1]],
          distance=nn()[["nn.dist"]][,-1])
-})
-
-origin <- reactive({
-  slice_maxed()|>
-    filter(noc_2021_5_name==input$noc)
-})
-
-dest <- reactive({
-  slice_maxed()|>
-    filter(noc_2021_5_name==input$dest)
 })
 ```
 
@@ -181,7 +168,7 @@ Column
 ```{r, fig.retina=2}
 renderPlot({
   origin()|>
-    slice_max(measure, n=50, with_ties = FALSE)|>
+    slice_max(measure, n=50, with_ties = FALSE)|> #only display 50 rows even if more
     mutate(value=str_trunc(value, width=50))|>
     ggplot(aes(measure, fct_reorder(value, measure)))+
     geom_point()+
@@ -201,7 +188,7 @@ Column
 renderPlot({
   req(input$dest)
   dest()|>
-    slice_max(measure, n=50, with_ties = FALSE)|>
+    slice_max(measure, n=50, with_ties = FALSE)|>  #only display 50 rows even if more
     mutate(value=str_trunc(value, width=50))|>
     ggplot(aes(measure, fct_reorder(value, measure)))+
     geom_point()+
@@ -210,8 +197,6 @@ renderPlot({
     theme(text=element_text(size=14),
           axis.text.x = element_text(angle = 90, vjust = 1, hjust=1))
 })
-
-
 ```
 
 
