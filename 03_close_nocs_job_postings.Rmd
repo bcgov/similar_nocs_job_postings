@@ -15,9 +15,11 @@ library(here)
 library(conflicted)
 conflicts_prefer(dplyr::filter)
 tfidf <- read_rds(here("out","tf_idf.rds"))|>
-  rename(measure=tf_idf)
+  rename(measure=tf_idf)|>
+  na.omit()
 tf <- read_rds(here("out","tf.rds"))|>
-  rename(measure=tf)
+  rename(measure=tf)|>
+  na.omit()
 ```
 
 Description
@@ -28,13 +30,12 @@ Column
 
 #### Data Source:
 
--   job_postings_May29_2024.csv
+-   Lightcast job postings (21M)
 
 #### Details:
 
 -   The goal of this exercise is to find occupations that are "close" in terms of the textual features of their job postings. 
--   In the above file there are more than 16,000 textual features, and roughly 500 occupations. 
--   Note that some occupations (e.g. hunters and trappers) have very few job postings: we filter them out.
+-   In the above file there are more than 28,000 textual features, and 500 occupations. 
 -   Distance metrics are meaningless in high dimensional space, so we need to find a way to reduce the dimensionality of the problem. 
 -   We do this in two ways:
       -   We only retain the top_n features of each NOC, either in terms of 
@@ -116,12 +117,13 @@ dest <- reactive({
 })
 wide <- reactive({
   slice_maxed()|>
-    pivot_wider(names_from = "value", values_from = "measure", values_fill = 0)
+    pivot_wider(names_from = "name", values_from = "measure", values_fill = 0)
 })
 first_components <- reactive({
   rwnms <- wide()$noc_2021_5_name #to assign rownames after pca
   pca <- wide()|>
    column_to_rownames("noc_2021_5_name")|>
+   janitor::remove_constant()|>
    scale()|>
    prcomp()
   first <- pca$x[,1:input$dim]
@@ -169,8 +171,8 @@ Column
 renderPlot({
   origin()|>
     slice_max(measure, n=50, with_ties = FALSE)|> #only display 50 rows even if more
-    mutate(value=str_trunc(value, width=50))|>
-    ggplot(aes(measure, fct_reorder(value, measure)))+
+    mutate(name=str_trunc(name, width=50))|>
+    ggplot(aes(measure, fct_reorder(name, measure)))+
     geom_point()+
     labs(x=input$metric, y=NULL)+
     theme_minimal()+
@@ -189,8 +191,8 @@ renderPlot({
   req(input$dest)
   dest()|>
     slice_max(measure, n=50, with_ties = FALSE)|>  #only display 50 rows even if more
-    mutate(value=str_trunc(value, width=50))|>
-    ggplot(aes(measure, fct_reorder(value, measure)))+
+    mutate(name=str_trunc(name, width=50))|>
+    ggplot(aes(measure, fct_reorder(name, measure)))+
     geom_point()+
     labs(x=input$metric, y=NULL)+
     theme_minimal()+
